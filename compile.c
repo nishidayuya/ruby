@@ -5068,6 +5068,12 @@ frozen_string_literal_p(const rb_iseq_t *iseq)
 }
 
 static inline bool
+frozen_all_literal_p(const rb_iseq_t *iseq)
+{
+    return ISEQ_COMPILE_DATA(iseq)->option->frozen_literal > 0;
+}
+
+static inline bool
 static_literal_node_p(const NODE *node, const rb_iseq_t *iseq, bool hash_key)
 {
     switch (nd_type(node)) {
@@ -5234,7 +5240,12 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
                 /* Emit optimized code */
                 FLUSH_CHUNK;
                 if (first_chunk) {
-                    ADD_INSN1(ret, line_node, duparray, ary);
+                    if (frozen_all_literal_p(iseq)) {
+                        ADD_INSN1(ret, line_node, putobject, ary);
+                    }
+                    else {
+                        ADD_INSN1(ret, line_node, duparray, ary);
+                    }
                     first_chunk = FALSE;
                 }
                 else {
@@ -5275,6 +5286,9 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
     }
 
     FLUSH_CHUNK;
+    if (!popped && frozen_all_literal_p(iseq)) {
+        ADD_SEND(ret, line_node, idFreeze, INT2FIX(0));
+    }
 #undef FLUSH_CHUNK
     return 1;
 }
@@ -5380,7 +5394,12 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
                 /* Emit optimized code */
                 FLUSH_CHUNK();
                 if (first_chunk) {
-                    ADD_INSN1(ret, line_node, duphash, hash);
+                    if (frozen_all_literal_p(iseq)) {
+                        ADD_INSN1(ret, line_node, putobject, hash);
+                    }
+                    else {
+                        ADD_INSN1(ret, line_node, duphash, hash);
+                    }
                     first_chunk = 0;
                 }
                 else {
@@ -5473,6 +5492,9 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
     }
 
     FLUSH_CHUNK();
+    if (!popped && !method_call_keywords && frozen_all_literal_p(iseq)) {
+        ADD_SEND(ret, line_node, idFreeze, INT2FIX(0));
+    }
 #undef FLUSH_CHUNK
     return 1;
 }

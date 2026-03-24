@@ -1197,6 +1197,7 @@ typedef struct rb_ast_body_struct {
     rb_parser_ary_t *script_lines;
     int line_count;
     signed int frozen_string_literal:2; /* -1: not specified, 0: false, 1: true */
+    signed int frozen_literal:2; /* -1: not specified, 0: false, 1: true */
     signed int coverage_enabled:2; /* -1: not specified, 0: false, 1: true */
 } rb_ast_body_t;
 typedef struct rb_ast_struct {

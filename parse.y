@@ -565,6 +565,7 @@ struct parser_params {
 #endif
     /* compile_option */
     signed int frozen_string_literal:2; /* -1: not specified, 0: false, 1: true */
+    signed int frozen_literal:2; /* -1: not specified, 0: false, 1: true */
 
     unsigned int command_start:1;
     unsigned int eofp: 1;
@@ -7466,6 +7467,7 @@ yycompile0(VALUE arg)
         prelude = block_append(p, p->eval_tree_begin, body);
         RNODE_SCOPE(tree)->nd_body = prelude;
         p->ast->body.frozen_string_literal = p->frozen_string_literal;
+        p->ast->body.frozen_literal = p->frozen_literal;
         p->ast->body.coverage_enabled = cov;
         if (p->keep_tokens) {
             p->ast->node_buffer->tokens = tokens;
@@ -9381,6 +9383,23 @@ parser_set_token_info(struct parser_params *p, const char *name, const char *val
 }
 
 static void
+parser_set_frozen_literal(struct parser_params *p, const char *name, const char *val)
+{
+    int b;
+
+    if (p->token_seen) {
+        rb_warning1("'%s' is ignored after any tokens", WARN_S(name));
+        return;
+    }
+
+    b = parser_get_bool(p, name, val);
+    if (b < 0) return;
+
+    p->frozen_literal = b;
+    if (b == 1) p->frozen_string_literal = 1;
+}
+
+static void
 parser_set_frozen_string_literal(struct parser_params *p, const char *name, const char *val)
 {
     int b;
@@ -9451,6 +9470,7 @@ struct magic_comment {
 static const struct magic_comment magic_comments[] = {
     {"coding", magic_comment_encoding, parser_encode_length},
     {"encoding", magic_comment_encoding, parser_encode_length},
+    {"frozen_literal", parser_set_frozen_literal},
     {"frozen_string_literal", parser_set_frozen_string_literal},
     {"shareable_constant_value", parser_set_shareable_constant_value},
     {"warn_indent", parser_set_token_info},
@@ -15510,6 +15530,7 @@ parser_initialize(struct parser_params *p)
     p->node_id = 0;
     p->delayed.token = NULL;
     p->frozen_string_literal = -1; /* not specified */
+    p->frozen_literal = -1; /* not specified */
 #ifndef RIPPER
     p->error_buffer = Qfalse;
     p->end_expect_token_locations = NULL;
