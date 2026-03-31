@@ -52,3 +52,7 @@ RUN mise use -g ruby@latest \
 # Setup shell for mise
 RUN echo 'eval "$(mise activate bash)"' >> ~/.bashrc \
     && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
+
+RUN sudo apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && sudo apt-get -y install --no-install-recommends \
+    systemtap-sdt-dev
