@@ -168,6 +168,15 @@ typedef struct pm_options {
     int8_t frozen_string_literal;
 
     /**
+    * Whether or not the frozen literal option has been set.
+    * May be:
+    *  - PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED
+    *  - PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED
+    *  - PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET
+    */
+    int8_t frozen_literal;
+
+    /**
      * Whether or not the encoding magic comments should be respected. This is a
      * niche use-case where you want to parse a file with a specific encoding
      * but ignore any encoding magic comments at the top of the file.

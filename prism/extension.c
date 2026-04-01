@@ -34,6 +34,7 @@ ID rb_id_option_encoding;
 ID rb_id_option_filepath;
 ID rb_id_option_freeze;
 ID rb_id_option_frozen_string_literal;
+ID rb_id_option_frozen_literal;
 ID rb_id_option_line;
 ID rb_id_option_main_script;
 ID rb_id_option_partial_script;
@@ -196,6 +197,10 @@ build_options_i(VALUE key, VALUE value, VALUE argument) {
         if (!NIL_P(value)) pm_options_line_set(options, NUM2INT(value));
     } else if (key_id == rb_id_option_frozen_string_literal) {
         if (!NIL_P(value)) pm_options_frozen_string_literal_set(options, RTEST(value));
+    } else if (key_id == rb_id_option_frozen_literal) {
+        if (!NIL_P(value)) {
+            options->frozen_literal = RTEST(value) ? PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED : PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED;
+        }
     } else if (key_id == rb_id_option_version) {
         if (!NIL_P(value)) {
             const char *version = check_string(value);
@@ -1379,6 +1384,7 @@ Init_prism(void) {
     rb_id_option_filepath = rb_intern_const("filepath");
     rb_id_option_freeze = rb_intern_const("freeze");
     rb_id_option_frozen_string_literal = rb_intern_const("frozen_string_literal");
+    rb_id_option_frozen_literal = rb_intern_const("frozen_literal");
     rb_id_option_line = rb_intern_const("line");
     rb_id_option_main_script = rb_intern_const("main_script");
     rb_id_option_partial_script = rb_intern_const("partial_script");

@@ -1140,6 +1140,9 @@ pm_iseq_new_with_opt(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpa
 
     next_option = *option;
     next_option.coverage_enabled = node->coverage_enabled < 0 ? 0 : node->coverage_enabled > 0;
+    if (node->frozen_literal >= 0) {
+        next_option.frozen_literal = node->frozen_literal;
+    }
     option = &next_option;
 
     pm_location_t *location = &node->base.location;

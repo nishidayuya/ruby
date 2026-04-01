@@ -872,6 +872,16 @@ struct pm_parser {
     int8_t frozen_string_literal;
 
     /**
+     * Whether or not we have found a frozen_literal magic comment with
+     * a true or false value.
+     * May be:
+     *  - PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED
+     *  - PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED
+     *  - PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET
+     */
+    int8_t frozen_literal;
+
+    /**
      * Whether or not we are parsing an eval string. This impacts whether or not
      * we should evaluate if block exits/yields are valid.
      */

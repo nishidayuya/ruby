@@ -3242,6 +3242,7 @@ pm_scope_node_init(const pm_node_t *node, pm_scope_node_t *scope, pm_scope_node_
         scope->filepath_encoding = previous->filepath_encoding;
         scope->constants = previous->constants;
         scope->coverage_enabled = previous->coverage_enabled;
+        scope->frozen_literal = previous->frozen_literal;
         scope->script_lines = previous->script_lines;
     }
 
@@ -7126,10 +7127,18 @@ pm_compile_array_node(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list
             if (elements->size) {
                 VALUE value = pm_static_literal_value(iseq, node, scope_node);
                 RB_OBJ_SET_FROZEN_SHAREABLE(value);
-                PUSH_INSN1(ret, *location, duparray, value);
+                if (scope_node->frozen_literal > 0) {
+                    PUSH_INSN1(ret, *location, putobject, value);
+                }
+                else {
+                    PUSH_INSN1(ret, *location, duparray, value);
+                }
             }
             else {
                 PUSH_INSN1(ret, *location, newarray, INT2FIX(0));
+                if (scope_node->frozen_literal > 0) {
+                    PUSH_CALL(ret, *location, idFreeze, INT2FIX(0));
+                }
             }
         }
         return;
@@ -9326,10 +9335,18 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
                 if (cast->elements.size == 0) {
                     PUSH_INSN1(ret, location, newhash, INT2FIX(0));
+                    if (scope_node->frozen_literal > 0) {
+                        PUSH_CALL(ret, location, idFreeze, INT2FIX(0));
+                    }
                 }
                 else {
                     VALUE value = pm_static_literal_value(iseq, node, scope_node);
-                    PUSH_INSN1(ret, location, duphash, value);
+                    if (scope_node->frozen_literal > 0) {
+                        PUSH_INSN1(ret, location, putobject, value);
+                    }
+                    else {
+                        PUSH_INSN1(ret, location, duphash, value);
+                    }
                     RB_OBJ_WRITTEN(iseq, Qundef, value);
                 }
             }
@@ -9356,6 +9373,9 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             }
             else {
                 pm_compile_hash_elements(iseq, node, elements, 0, Qundef, false, ret, scope_node);
+                if (scope_node->frozen_literal > 0) {
+                    PUSH_CALL(ret, location, idFreeze, INT2FIX(0));
+                }
             }
         }
 
@@ -11090,6 +11110,7 @@ pm_parse_process(pm_parse_result_t *result, pm_node_t *node, VALUE *script_lines
     if (!scope_node->encoding) rb_bug("Encoding not found %s!", parser->encoding->name);
 
     scope_node->coverage_enabled = coverage_enabled;
+    scope_node->frozen_literal = (int) parser->frozen_literal;
 
     // If RubyVM.keep_script_lines is set to true, then we need to create that
     // array of script lines here.

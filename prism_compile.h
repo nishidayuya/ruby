@@ -56,6 +56,9 @@ typedef struct pm_scope_node {
     // The current coverage setting, passed down through the various scopes.
     int coverage_enabled;
 
+    // The current frozen_literal setting, passed down through the various scopes.
+    int frozen_literal;
+
     /**
      * This will only be set on the top-level scope node. It will contain all of
      * the instructions pertaining to BEGIN{} nodes.

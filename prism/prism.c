@@ -7618,6 +7618,33 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
                         break;
                 }
             }
+        } else if (key_length == 14) {
+            if (pm_strncasecmp(key_source, (const uint8_t *) "frozen_literal", 14) == 0) {
+                if (semantic_token_seen) {
+                    pm_parser_warn_token(parser, &parser->current, PM_WARN_IGNORED_FROZEN_STRING_LITERAL);
+                } else {
+                    switch (parser_lex_magic_comment_boolean_value(value_start, value_length)) {
+                        case PM_MAGIC_COMMENT_BOOLEAN_VALUE_INVALID:
+                            PM_PARSER_WARN_TOKEN_FORMAT(
+                                parser,
+                                parser->current,
+                                PM_WARN_INVALID_MAGIC_COMMENT_VALUE,
+                                (int) key_length,
+                                (const char *) key_source,
+                                (int) value_length,
+                                (const char *) value_start
+                            );
+                            break;
+                        case PM_MAGIC_COMMENT_BOOLEAN_VALUE_FALSE:
+                            parser->frozen_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED;
+                            break;
+                        case PM_MAGIC_COMMENT_BOOLEAN_VALUE_TRUE:
+                            parser->frozen_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED;
+                            parser->frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED;
+                            break;
+                    }
+                }
+            }
         } else if (key_length == 21) {
             if (pm_strncasecmp(key_source, (const uint8_t *) "frozen_string_literal", 21) == 0) {
                 // We only want to handle frozen string literal comments if it's
@@ -22002,6 +22029,7 @@ pm_parser_init_shebang(pm_parser_t *parser, const pm_options_t *options, const c
 
     parser->command_line = next_options.command_line;
     parser->frozen_string_literal = next_options.frozen_string_literal;
+    parser->frozen_literal = next_options.frozen_literal;
 }
 
 /**
@@ -22048,18 +22076,19 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .current_string = PM_STRING_EMPTY,
         .start_line = 1,
         .explicit_encoding = NULL,
-        .command_line = 0,
+        .command_line = (options == NULL) ? 0 : options->command_line,
         .parsing_eval = false,
         .partial_script = false,
         .command_start = true,
         .recovering = false,
-        .encoding_locked = false,
+        .encoding_locked = (options == NULL) ? false : options->encoding_locked,
         .encoding_changed = false,
         .pattern_matching_newlines = false,
         .in_keyword_arg = false,
         .current_block_exits = NULL,
         .semantic_token_seen = false,
-        .frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET,
+        .frozen_string_literal = (options == NULL) ? PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET : options->frozen_string_literal,
+        .frozen_literal = (options == NULL) ? PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET : options->frozen_literal,
         .current_regular_expression_ascii_only = false,
         .warn_mismatched_indentation = true
     };
