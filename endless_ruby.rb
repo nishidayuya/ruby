@@ -1,3 +1,4 @@
+# endless_ruby: true
 class Foo
   def bar
     p([__FILE__, __LINE__])
