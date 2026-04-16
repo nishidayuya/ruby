@@ -573,6 +573,8 @@ struct parser_params {
     unsigned int has_shebang: 1;
     unsigned int token_seen: 1;
     unsigned int token_info_enabled: 1;
+    unsigned int endless_ruby: 1;
+    unsigned int new_line_started: 1;
 # if WARN_PAST_SCOPE
     unsigned int past_scope_enabled: 1;
 # endif
@@ -600,6 +602,10 @@ struct parser_params {
     int token_id;
     /* Array for term tokens */
     rb_parser_ary_t *tokens;
+    int pending_indent_ends;
+    int saved_token;
+    YYSTYPE saved_lval;
+    YYLTYPE saved_yylloc;
 #else
     /* Ripper only */
 
@@ -7051,8 +7057,8 @@ static void
 token_info_push(struct parser_params *p, const char *token, const rb_code_location_t *loc)
 {
     token_info *ptinfo;
-
     if (!p->token_info_enabled) return;
+
     ptinfo = ALLOC(token_info);
     ptinfo->token = token;
     ptinfo->next = p->token_info;
@@ -9448,12 +9454,23 @@ struct magic_comment {
     rb_magic_comment_length_t length;
 };
 
+static void
+parser_set_endless_ruby(struct parser_params *p, const char *name, const char *val)
+{
+    int b = parser_get_bool(p, name, val);
+    if (b >= 0) {
+        p->endless_ruby = b;
+        if (b) p->token_info_enabled = 1;
+    }
+}
+
 static const struct magic_comment magic_comments[] = {
     {"coding", magic_comment_encoding, parser_encode_length},
     {"encoding", magic_comment_encoding, parser_encode_length},
     {"frozen_string_literal", parser_set_frozen_string_literal},
     {"shareable_constant_value", parser_set_shareable_constant_value},
     {"warn_indent", parser_set_token_info},
+    {"endless_ruby", parser_set_endless_ruby},
 # if WARN_PAST_SCOPE
     {"warn_past_scope", parser_set_past_scope},
 # endif
@@ -11218,11 +11235,112 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
 {
     enum yytokentype t;
 
+    if (p->pending_indent_ends > 0) {
+        p->pending_indent_ends--;
+        t = keyword_end;
+        dispatch_scan_event(p, t);
+        if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
+            p->pending_indent_ends = -1;
+        }
+        return t;
+    }
+
+    if (p->pending_indent_ends == -1) {
+        p->pending_indent_ends = 0;
+        t = (enum yytokentype)'\n';
+        *lval = p->saved_lval;
+        *yylloc = p->saved_yylloc;
+        dispatch_scan_event(p, t);
+        return t;
+    }
+
+    if (p->saved_token != -1) {
+        t = (enum yytokentype)p->saved_token;
+        *lval = p->saved_lval;
+        *yylloc = p->saved_yylloc;
+        p->saved_token = -1;
+        if (has_delayed_token(p))
+            dispatch_delayed_token(p, t);
+        else if (t != END_OF_INPUT)
+            dispatch_scan_event(p, t);
+        return t;
+    }
+
     p->lval = lval;
     lval->node = 0;
     p->yylloc = yylloc;
 
     t = parser_yylex(p);
+    RUBY_SET_YYLLOC(*p->yylloc);
+
+    if (p->endless_ruby) {
+        if (t == '\n') {
+            p->new_line_started = 1;
+        }
+        else if (t != tIGNORED_NL && t != tSP && t != tCOMMENT) {
+            if (t == END_OF_INPUT) {
+                while (p->token_info) {
+                    p->pending_indent_ends++;
+                    token_info_pop(p, "end", p->yylloc);
+                    pop_end_expect_token_locations(p);
+                }
+                if (p->pending_indent_ends > 0) {
+                    p->pending_indent_ends--;
+                    p->saved_token = END_OF_INPUT;
+                    p->saved_lval = *lval;
+                    p->saved_yylloc = *yylloc;
+                    t = keyword_end;
+                    dispatch_scan_event(p, t);
+                    if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
+                        p->pending_indent_ends = -1;
+                    }
+                    return t;
+                }
+            }
+            else if (p->new_line_started && t != keyword_end) {
+                token_info e;
+                token_info_setup(&e, p->lex.pbeg, p->yylloc);
+                if (e.nonspc == 0) {
+                    token_info *info = p->token_info;
+                    while (info && e.indent <= info->indent) {
+                        // Check if t is a continuation keyword
+                        int is_cont = 0;
+                        const char *beg_token = info->token;
+                        if (t == keyword_elsif || t == keyword_else) {
+                            if (strcmp(beg_token, "if") == 0 || strcmp(beg_token, "unless") == 0 || strcmp(beg_token, "case") == 0) is_cont = 1;
+                        }
+                        else if (t == keyword_rescue || t == keyword_ensure) {
+                            if (strcmp(beg_token, "begin") == 0 || strcmp(beg_token, "def") == 0 || strcmp(beg_token, "class") == 0 || strcmp(beg_token, "module") == 0 || strcmp(beg_token, "do") == 0) is_cont = 1;
+                        }
+                        else if (t == keyword_when || t == keyword_in) {
+                            if (strcmp(beg_token, "case") == 0) is_cont = 1;
+                        }
+
+                        if (is_cont) break;
+
+                        p->pending_indent_ends++;
+                        info = info->next;
+                    }
+                }
+                p->new_line_started = 0;
+                if (p->pending_indent_ends > 0) {
+                    p->pending_indent_ends--;
+                    p->saved_token = t;
+                    p->saved_lval = *lval;
+                    p->saved_yylloc = *yylloc;
+                    t = keyword_end;
+                    dispatch_scan_event(p, t);
+                    if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
+                        p->pending_indent_ends = -1;
+                    }
+                    return t;
+                }
+            }
+            else {
+                p->new_line_started = 0;
+            }
+        }
+    }
 
     if (has_delayed_token(p))
         dispatch_delayed_token(p, t);
@@ -15515,6 +15633,7 @@ parser_initialize(struct parser_params *p)
     p->end_expect_token_locations = NULL;
     p->token_id = 0;
     p->tokens = NULL;
+    p->saved_token = -1;
 #else
     p->result = Qnil;
     p->parsing_thread = Qnil;
