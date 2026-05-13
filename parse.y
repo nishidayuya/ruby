@@ -4857,12 +4857,18 @@ k_elsif 	: keyword_elsif
                         token_info_warn(p, "elsif", p->token_info, 1, &@$);
                     }
                 ;
-
 k_end		: keyword_end
-                    {
-                        token_info_pop(p, "end", &@$);
-                        pop_end_expect_token_locations(p);
-                    }
+			{
+			    token_info_pop(p, "end", &@$);
+			    pop_end_expect_token_locations(p);
+			}
+		| tINDENT_END
+			{
+			    token_info_pop(p, "end", &@$);
+			    pop_end_expect_token_locations(p);
+			}
+		;
+
                 | tDUMNY_END
                     {
                         compile_error(p, "syntax error, unexpected end-of-input");
@@ -7065,6 +7071,20 @@ token_info_push(struct parser_params *p, const char *token, const rb_code_locati
     token_info_setup(ptinfo, p->lex.pbeg, loc);
 
     p->token_info = ptinfo;
+}
+
+static void
+token_info_pop(struct parser_params *p, const char *token, const rb_code_location_t *loc);
+
+static void
+token_info_pop_no_warn(struct parser_params *p, const char *token, const rb_code_location_t *loc)
+{
+    token_info *ptinfo_beg = p->token_info;
+
+    if (!ptinfo_beg) return;
+
+    p->token_info = ptinfo_beg->next;
+    ruby_sized_xfree(ptinfo_beg, sizeof(token_info));
 }
 
 static void
@@ -10525,7 +10545,7 @@ parser_yylex(struct parser_params *p)
       case -1:			/* end of script. */
         p->eofp = 1;
 #ifndef RIPPER
-        if (p->end_expect_token_locations) {
+        if (p->end_expect_token_locations && !p->endless_ruby) {
             pop_end_expect_token_locations(p);
             RUBY_SET_YYLLOC_OF_DUMMY_END(*p->yylloc);
             return tDUMNY_END;
@@ -11237,7 +11257,7 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
 
     if (p->pending_indent_ends > 0) {
         p->pending_indent_ends--;
-        t = keyword_end;
+        t = tINDENT_END;
         dispatch_scan_event(p, t);
         if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
             p->pending_indent_ends = -1;
@@ -11279,17 +11299,17 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
         }
         else if (t != tIGNORED_NL && t != tSP && t != tCOMMENT) {
             if (t == END_OF_INPUT) {
-                while (p->token_info) {
+                token_info *info = p->token_info;
+                while (info) {
                     p->pending_indent_ends++;
-                    token_info_pop(p, "end", p->yylloc);
-                    pop_end_expect_token_locations(p);
+                    info = info->next;
                 }
                 if (p->pending_indent_ends > 0) {
                     p->pending_indent_ends--;
                     p->saved_token = END_OF_INPUT;
                     p->saved_lval = *lval;
                     p->saved_yylloc = *yylloc;
-                    t = keyword_end;
+                    t = tINDENT_END;
                     dispatch_scan_event(p, t);
                     if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
                         p->pending_indent_ends = -1;
@@ -11328,7 +11348,7 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
                     p->saved_token = t;
                     p->saved_lval = *lval;
                     p->saved_yylloc = *yylloc;
-                    t = keyword_end;
+                    t = tINDENT_END;
                     dispatch_scan_event(p, t);
                     if (p->pending_indent_ends == 0 && p->saved_token != -1 && p->saved_token != '\n' && p->saved_token != END_OF_INPUT) {
                         p->pending_indent_ends = -1;
