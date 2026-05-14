@@ -581,6 +581,11 @@ struct parser_params {
     unsigned int error_p: 1;
     unsigned int cr_seen: 1;
 
+    int pending_indent_ends;
+    int saved_token;
+    YYSTYPE saved_lval;
+    YYLTYPE saved_yylloc;
+
 #ifndef RIPPER
     /* Ruby core only */
 
@@ -602,10 +607,6 @@ struct parser_params {
     int token_id;
     /* Array for term tokens */
     rb_parser_ary_t *tokens;
-    int pending_indent_ends;
-    int saved_token;
-    YYSTYPE saved_lval;
-    YYLTYPE saved_yylloc;
 #else
     /* Ripper only */
 
