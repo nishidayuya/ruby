@@ -2308,6 +2308,24 @@ process_options_global_setup(const ruby_cmdline_options_t *opt, const rb_iseq_t 
     rb_exec_event_hook_script_compiled(ec, iseq, script);
 }
 
+static bool
+is_endless_ruby_file(VALUE fname_v)
+{
+    int fd;
+    const char *fname;
+    char buf[1024];
+    ssize_t n;
+
+    if (!RB_TYPE_P(fname_v, T_STRING)) return false;
+    fname = StringValueCStr(fname_v);
+    if ((fd = rb_cloexec_open(fname, O_RDONLY, 0)) < 0) return false;
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = '\0';
+    return strstr(buf, "endless_ruby: true") != NULL;
+}
+
 static VALUE
 process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 {
@@ -2328,6 +2346,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     const char *s;
     char fbuf[MAXPATHLEN];
     int i = (int)proc_options(argc, argv, opt, 0);
+
     unsigned int dump = opt->dump & dump_exit_bits;
     const rb_box_t *box = rb_root_box();
     const long loaded_before_enc = RARRAY_LEN(box->loaded_features);
@@ -2481,6 +2500,10 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     }
 #endif
     rb_obj_freeze(opt->script_name);
+
+    if (rb_ruby_prism_p() && !opt->e_script && is_endless_ruby_file(opt->script_name)) {
+        rb_ruby_default_parser_set(RB_DEFAULT_PARSER_PARSE_Y);
+    }
     if (IF_UTF8_PATH(uenc != lenc, 1)) {
         long i;
         VALUE load_path = box->load_path;
