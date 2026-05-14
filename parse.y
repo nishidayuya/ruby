@@ -1045,6 +1045,7 @@ static int parser_yyerror0(struct parser_params*, const char*);
 static void token_info_setup(token_info *ptinfo, const char *ptr, const rb_code_location_t *loc);
 static void token_info_push(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_pop(struct parser_params*, const char *token, const rb_code_location_t *loc);
+static void token_info_pop_no_warn(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc);
 static void token_info_drop(struct parser_params *p, const char *token, rb_code_position_t beg_pos);
 
@@ -2763,6 +2764,7 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
 %token <node> tSTRING_CONTENT "literal content"
 %token <num>  tREGEXP_END
 %token <num>  tDUMNY_END     "dummy end"
+%token <num>  tINDENT_END    "indent end"
 
 %type <node> singleton singleton_expr strings string string1 xstring regexp
 %type <node> string_contents xstring_contents regexp_contents string_content
@@ -4864,16 +4866,14 @@ k_end		: keyword_end
 			}
 		| tINDENT_END
 			{
-			    token_info_pop(p, "end", &@$);
+			    token_info_pop_no_warn(p, "end", &@$);
 			    pop_end_expect_token_locations(p);
 			}
-		;
-
-                | tDUMNY_END
+		| tDUMNY_END
                     {
                         compile_error(p, "syntax error, unexpected end-of-input");
                     }
-                ;
+		;
 
 k_return	: keyword_return
                     {
@@ -11322,7 +11322,7 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
                 token_info_setup(&e, p->lex.pbeg, p->yylloc);
                 if (e.nonspc == 0) {
                     token_info *info = p->token_info;
-                    while (info && e.indent <= info->indent) {
+                    while (info && !info->nonspc && e.indent <= info->indent) {
                         // Check if t is a continuation keyword
                         int is_cont = 0;
                         const char *beg_token = info->token;
