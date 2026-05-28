@@ -47,6 +47,7 @@ VALUE rb_parser_encoding(VALUE);
 VALUE rb_parser_set_yydebug(VALUE, VALUE);
 VALUE rb_parser_build_script_lines_from(rb_parser_ary_t *script_lines);
 void rb_parser_set_options(VALUE, int, int, int, int);
+void rb_parser_set_endless_ruby(VALUE vparser);
 VALUE rb_parser_load_file(VALUE parser, VALUE name);
 void rb_parser_set_script_lines(VALUE vparser);
 void rb_parser_error_tolerant(VALUE vparser);

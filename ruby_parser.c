@@ -559,6 +559,15 @@ rb_parser_set_options(VALUE vparser, int print, int loop, int chomp, int split)
     rb_ruby_parser_set_options(parser->parser_params, print, loop, chomp, split);
 }
 
+void
+rb_parser_set_endless_ruby(VALUE vparser)
+{
+    struct ruby_parser *parser;
+
+    TypedData_Get_Struct(vparser, struct ruby_parser, &ruby_parser_data_type, parser);
+    rb_ruby_parser_set_endless_ruby(parser->parser_params);
+}
+
 VALUE
 rb_parser_set_context(VALUE vparser, const struct rb_iseq_struct *base, int main)
 {

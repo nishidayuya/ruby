@@ -9689,6 +9689,7 @@ parser_prepare(struct parser_params *p)
 {
     int c = nextc0(p, FALSE);
     p->token_info_enabled = !compile_for_eval && RTEST(ruby_verbose);
+    if (p->endless_ruby) p->token_info_enabled = 1;
     switch (c) {
       case '#':
         if (peek(p, '!')) p->has_shebang = 1;
@@ -15583,6 +15584,13 @@ rb_ruby_parser_set_options(struct parser_params *p, int print, int loop, int cho
     p->do_loop = loop;
     p->do_chomp = chomp;
     p->do_split = split;
+}
+
+void
+rb_ruby_parser_set_endless_ruby(struct parser_params *p)
+{
+    p->endless_ruby = 1;
+    p->token_info_enabled = 1;
 }
 
 static NODE *

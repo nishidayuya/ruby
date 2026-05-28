@@ -61,6 +61,7 @@ void rb_ruby_parser_mark(void *ptr);
 size_t rb_ruby_parser_memsize(const void *ptr);
 
 void rb_ruby_parser_set_options(rb_parser_t *p, int print, int loop, int chomp, int split);
+void rb_ruby_parser_set_endless_ruby(rb_parser_t *p);
 rb_parser_t *rb_ruby_parser_set_context(rb_parser_t *p, const struct rb_iseq_struct *base, int main);
 void rb_ruby_parser_set_script_lines(rb_parser_t *p);
 void rb_ruby_parser_error_tolerant(rb_parser_t *p);

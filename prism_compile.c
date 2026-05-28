@@ -11408,6 +11408,7 @@ pm_parse_file(pm_parse_result_t *result, VALUE filepath, VALUE *script_lines)
     pm_options_version_for_current_ruby_set(&result->options);
 
     pm_parser_init(&result->parser, pm_string_source(&result->input), pm_string_length(&result->input), &result->options);
+    result->parser.endless_ruby = true;
     pm_node_t *node = pm_parse(&result->parser);
 
     VALUE error = pm_parse_process(result, node, script_lines);
