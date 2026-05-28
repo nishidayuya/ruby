@@ -2086,13 +2086,45 @@ show_help(const char *progname, int help)
     usage(progname, help, tty, columns);
 }
 
+static bool
+is_endless_ruby_file(VALUE fname_v)
+{
+    int fd;
+    const char *fname;
+    char buf[8192];
+    ssize_t n;
+
+    if (!RB_TYPE_P(fname_v, T_STRING)) return false;
+    fname = StringValueCStr(fname_v);
+    if ((fd = rb_cloexec_open(fname, O_RDONLY, 0)) < 0) return false;
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = '\0';
+
+    const char *p = buf;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (p[0] == 'e' && p[1] == 'n' && p[2] == 'd' &&
+            (p[3] == '\0' || p[3] == '\n' || p[3] == '\r' ||
+             p[3] == ' ' || p[3] == '\t' || p[3] == '#' || p[3] == ';')) {
+            return false;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    return true;
+}
+
 static VALUE
 process_script(ruby_cmdline_options_t *opt)
 {
     rb_ast_t *ast;
     VALUE ast_value;
     VALUE parser = rb_parser_new();
-    rb_parser_set_endless_ruby(parser);
+    if (!opt->e_script && is_endless_ruby_file(opt->script_name)) {
+        rb_parser_set_endless_ruby(parser);
+    }
     const unsigned int dump = opt->dump;
 
     if (dump & DUMP_BIT(yydebug)) {
@@ -2484,7 +2516,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 #endif
     rb_obj_freeze(opt->script_name);
 
-    if (rb_ruby_prism_p() && !opt->e_script) {
+    if (rb_ruby_prism_p() && !opt->e_script && is_endless_ruby_file(opt->script_name)) {
         rb_ruby_default_parser_set(RB_DEFAULT_PARSER_PARSE_Y);
     }
     if (IF_UTF8_PATH(uenc != lenc, 1)) {
