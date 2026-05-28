@@ -445,6 +445,12 @@ typedef struct pm_context_node {
 
     /** A pointer to the previous context in the linked list. */
     struct pm_context_node *prev;
+
+    /**
+     * The indentation level of the context. This is used when endless_ruby is
+     * enabled to determine when a context should be closed.
+     */
+    int64_t indent;
 } pm_context_node_t;
 
 /** This is the type of a comment that we've found while parsing. */
@@ -931,6 +937,21 @@ struct pm_parser {
      * toggled with a magic comment.
      */
     bool warn_mismatched_indentation;
+
+    /**
+     * Whether or not the endless_ruby magic comment was found.
+     */
+    bool endless_ruby;
+
+    /**
+     * The number of ends that should be injected into the token stream.
+     */
+    uint32_t pending_ends;
+
+    /**
+     * The indentation of the opening keyword of the current context.
+     */
+    int64_t opening_indent;
 };
 
 #endif

@@ -76,9 +76,24 @@ lex_mode_terminator(const uint8_t start) {
             return start;
     }
 }
+static bool
+lex_mode_push(pm_parser_t *parser, pm_lex_mode_t lex_mode);
+
+static size_t token_newline_index(const pm_parser_t *parser);
+static int64_t token_column(const pm_parser_t *parser, size_t newline_index, const pm_token_t *token, bool break_on_non_space);
+
+/**
+ * Returns the indentation of the given token.
+ */
+static int64_t
+token_indentation(pm_parser_t *parser, const pm_token_t *token) {
+    size_t newline_index = (size_t) (pm_newline_list_line(&parser->newline_list, token->start, 1) - 1);
+    return token_column(parser, newline_index, token, false);
+}
 
 /**
  * Push a new lex state onto the stack. If we're still within the pre-allocated
+---
  * space of the lex state stack, then we'll just use a new slot. Otherwise we'll
  * allocate a new pointer and use that.
  */
@@ -7618,6 +7633,28 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
                         break;
                 }
             }
+        } else if (key_length == 12) {
+            if (pm_strncasecmp(key_source, (const uint8_t *) "endless_ruby", 12) == 0) {
+                switch (parser_lex_magic_comment_boolean_value(value_start, value_length)) {
+                    case PM_MAGIC_COMMENT_BOOLEAN_VALUE_INVALID:
+                        PM_PARSER_WARN_TOKEN_FORMAT(
+                            parser,
+                            parser->current,
+                            PM_WARN_INVALID_MAGIC_COMMENT_VALUE,
+                            (int) key_length,
+                            (const char *) key_source,
+                            (int) value_length,
+                            (const char *) value_start
+                        );
+                        break;
+                    case PM_MAGIC_COMMENT_BOOLEAN_VALUE_FALSE:
+                        parser->endless_ruby = false;
+                        break;
+                    case PM_MAGIC_COMMENT_BOOLEAN_VALUE_TRUE:
+                        parser->endless_ruby = true;
+                        break;
+                }
+            }
         } else if (key_length == 21) {
             if (pm_strncasecmp(key_source, (const uint8_t *) "frozen_string_literal", 21) == 0) {
                 // We only want to handle frozen string literal comments if it's
@@ -7781,7 +7818,8 @@ context_push(pm_parser_t *parser, pm_context_t context) {
     pm_context_node_t *context_node = (pm_context_node_t *) xmalloc(sizeof(pm_context_node_t));
     if (context_node == NULL) return false;
 
-    *context_node = (pm_context_node_t) { .context = context, .prev = NULL };
+    *context_node = (pm_context_node_t) { .context = context, .prev = NULL, .indent = parser->opening_indent };
+    parser->opening_indent = -1;
 
     if (parser->current_context == NULL) {
         parser->current_context = context_node;
@@ -9724,9 +9762,21 @@ pm_lex_percent_delimiter(pm_parser_t *parser) {
  * lex callback, and then return from the parser_lex function.
  */
 #define LEX(token_type) parser->current.type = token_type; parser_lex_callback(parser); return
+static bool
+is_continuation_keyword(const uint8_t *start, const uint8_t *end) {
+    size_t len = (size_t) (end - start);
+    if (len == 4 && memcmp(start, "else", 4) == 0) return true;
+    if (len == 5 && memcmp(start, "elsif", 5) == 0) return true;
+    if (len == 6 && memcmp(start, "rescue", 6) == 0) return true;
+    if (len == 6 && memcmp(start, "ensure", 6) == 0) return true;
+    if (len == 4 && memcmp(start, "when", 4) == 0) return true;
+    if (len == 2 && memcmp(start, "in", 2) == 0) return true;
+    return false;
+}
 
 /**
  * Called when the parser requires a new token. The parser maintains a moving
+---
  * window of two tokens at a time: parser.previous and parser.current. This
  * function will move the current token into the previous token and then
  * lex a new token into the current token.
@@ -9735,6 +9785,13 @@ static void
 parser_lex(pm_parser_t *parser) {
     assert(parser->current.end <= parser->end);
     parser->previous = parser->current;
+
+    if (parser->pending_ends > 0) {
+        parser->pending_ends--;
+        parser->current.type = PM_TOKEN_KEYWORD_END;
+        parser_lex_callback(parser);
+        return;
+    }
 
     // This value mirrors cmd_state from CRuby.
     bool previous_command_start = parser->command_start;
@@ -9822,6 +9879,18 @@ parser_lex(pm_parser_t *parser) {
             // We'll check if we're at the end of the file. If we are, then we
             // need to return the EOF token.
             if (parser->current.end >= parser->end) {
+                if (parser->endless_ruby) {
+                    while (parser->current_context && parser->current_context->indent != -1) {
+                        parser->pending_ends++;
+                        context_pop(parser);
+                    }
+
+                    if (parser->pending_ends > 0) {
+                        parser->pending_ends--;
+                        LEX(PM_TOKEN_KEYWORD_END);
+                    }
+                }
+
                 // If we hit EOF, but the EOF came immediately after a newline,
                 // set the start of the token to the newline.  This way any EOF
                 // errors will be reported as happening on that line rather than
@@ -9840,6 +9909,16 @@ parser_lex(pm_parser_t *parser) {
                 case '\004': // ^D
                 case '\032': // ^Z
                     parser->current.end--;
+                    if (parser->endless_ruby) {
+                        while (parser->current_context && parser->current_context->indent != -1) {
+                            parser->pending_ends++;
+                            context_pop(parser);
+                        }
+                        if (parser->pending_ends > 0) {
+                            parser->pending_ends--;
+                            LEX(PM_TOKEN_KEYWORD_END);
+                        }
+                    }
                     LEX(PM_TOKEN_EOF);
 
                 case '#': { // comments
@@ -10093,6 +10172,45 @@ parser_lex(pm_parser_t *parser) {
                                 parser->next_start = NULL;
                                 parser->command_start = true;
                                 LEX(PM_TOKEN_KEYWORD_OR);
+                            }
+                        }
+                    }
+
+                    if (parser->endless_ruby) {
+                        const uint8_t *peek_cursor = parser->current.end;
+                        while (peek_cursor < parser->end) {
+                            peek_cursor += pm_strspn_inline_whitespace(peek_cursor, (size_t) (parser->end - peek_cursor));
+                            if (peek_cursor < parser->end && *peek_cursor == '#') {
+                                const uint8_t *ending = next_newline(peek_cursor, (size_t) (parser->end - peek_cursor));
+                                peek_cursor = ending == NULL ? parser->end : ending + 1;
+                            } else if (peek_cursor < parser->end && (*peek_cursor == '\r' || *peek_cursor == '\n')) {
+                                peek_cursor++;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if (peek_cursor < parser->end) {
+                            pm_line_column_t next_line_column = pm_newline_list_line_column(&parser->newline_list, peek_cursor, 1);
+                            pm_token_t next_token_dummy = { .start = peek_cursor, .end = peek_cursor };
+                            int64_t next_indent = token_column(parser, (size_t) (next_line_column.line - 1), &next_token_dummy, false);
+
+                            const uint8_t *next_token_end = peek_cursor;
+                            while (next_token_end < parser->end && ((*next_token_end >= 'a' && *next_token_end <= 'z') || *next_token_end == '_')) {
+                                next_token_end++;
+                            }
+
+                            bool continuation = is_continuation_keyword(peek_cursor, next_token_end);
+
+                            while (parser->current_context && parser->current_context->indent != -1 &&
+                                   parser->current_context->indent >= next_indent && !continuation) {
+                                parser->pending_ends++;
+                                context_pop(parser);
+                            }
+                        } else {
+                            while (parser->current_context && parser->current_context->indent != -1) {
+                                parser->pending_ends++;
+                                context_pop(parser);
                             }
                         }
                     }
@@ -14384,8 +14502,9 @@ parse_rescues(pm_parser_t *parser, size_t opening_newline_index, const pm_token_
     while (match1(parser, PM_TOKEN_KEYWORD_RESCUE)) {
         if (opening != NULL) parser_warn_indentation_mismatch(parser, opening_newline_index, opening, false, false);
         parser_lex(parser);
+        pm_token_t rescue_keyword = parser->previous;
 
-        pm_rescue_node_t *rescue = pm_rescue_node_create(parser, &parser->previous);
+        pm_rescue_node_t *rescue = pm_rescue_node_create(parser, &rescue_keyword);
 
         switch (parser->current.type) {
             case PM_TOKEN_EQUAL_GREATER: {
@@ -14460,6 +14579,9 @@ parse_rescues(pm_parser_t *parser, size_t opening_newline_index, const pm_token_
                 default: assert(false && "unreachable"); context = PM_CONTEXT_BEGIN_RESCUE; break;
             }
 
+            if (parser->endless_ruby) {
+                parser->opening_indent = token_indentation(parser, &rescue_keyword);
+            }
             pm_statements_node_t *statements = parse_statements(parser, context, (uint16_t) (depth + 1));
             if (statements != NULL) pm_rescue_node_statements_set(rescue, statements);
 
@@ -14516,6 +14638,7 @@ parse_rescues(pm_parser_t *parser, size_t opening_newline_index, const pm_token_
                 default: assert(false && "unreachable"); context = PM_CONTEXT_BEGIN_ELSE; break;
             }
 
+            if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &else_keyword);
             else_statements = parse_statements(parser, context, (uint16_t) (depth + 1));
             pm_accepts_block_stack_pop(parser);
 
@@ -14553,6 +14676,7 @@ parse_rescues(pm_parser_t *parser, size_t opening_newline_index, const pm_token_
                 default: assert(false && "unreachable"); context = PM_CONTEXT_BEGIN_RESCUE; break;
             }
 
+            if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &ensure_keyword);
             ensure_statements = parse_statements(parser, context, (uint16_t) (depth + 1));
             pm_accepts_block_stack_pop(parser);
 
@@ -14808,6 +14932,7 @@ parse_block(pm_parser_t *parser, uint16_t depth) {
         if (!match1(parser, PM_TOKEN_KEYWORD_END)) {
             if (!match3(parser, PM_TOKEN_KEYWORD_RESCUE, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_ENSURE)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &opening);
                 statements = UP(parse_statements(parser, PM_CONTEXT_BLOCK_KEYWORDS, (uint16_t) (depth + 1)));
                 pm_accepts_block_stack_pop(parser);
             }
@@ -15178,6 +15303,7 @@ parse_conditional(pm_parser_t *parser, pm_context_t context, size_t opening_newl
     pm_token_t keyword = parser->previous;
     pm_token_t then_keyword = not_provided(parser);
 
+    if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &keyword);
     pm_node_t *predicate = parse_predicate(parser, PM_BINDING_POWER_MODIFIER, context, &then_keyword, (uint16_t) (depth + 1));
     pm_statements_node_t *statements = NULL;
 
@@ -15220,6 +15346,7 @@ parse_conditional(pm_parser_t *parser, pm_context_t context, size_t opening_newl
             pm_node_t *predicate = parse_predicate(parser, PM_BINDING_POWER_MODIFIER, PM_CONTEXT_ELSIF, &then_keyword, (uint16_t) (depth + 1));
             pm_accepts_block_stack_push(parser, true);
 
+            if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &elsif_keyword);
             pm_statements_node_t *statements = parse_statements(parser, PM_CONTEXT_ELSIF, (uint16_t) (depth + 1));
             pm_accepts_block_stack_pop(parser);
             accept2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON);
@@ -15238,6 +15365,7 @@ parse_conditional(pm_parser_t *parser, pm_context_t context, size_t opening_newl
         pm_token_t else_keyword = parser->previous;
 
         pm_accepts_block_stack_push(parser, true);
+        if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &else_keyword);
         pm_statements_node_t *else_statements = parse_statements(parser, PM_CONTEXT_ELSE, (uint16_t) (depth + 1));
         pm_accepts_block_stack_pop(parser);
 
@@ -18302,6 +18430,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     }
 
                     if (!match3(parser, PM_TOKEN_KEYWORD_WHEN, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
+                        if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &when_keyword);
                         pm_statements_node_t *statements = parse_statements(parser, PM_CONTEXT_CASE_WHEN, (uint16_t) (depth + 1));
                         if (statements != NULL) {
                             pm_when_node_statements_set(when_node, statements);
@@ -18383,6 +18512,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     if (match3(parser, PM_TOKEN_KEYWORD_IN, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
                         statements = NULL;
                     } else {
+                        if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &in_keyword);
                         statements = parse_statements(parser, PM_CONTEXT_CASE_IN, (uint16_t) (depth + 1));
                     }
 
@@ -18407,6 +18537,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 pm_else_node_t *else_node;
 
                 if (!match1(parser, PM_TOKEN_KEYWORD_END)) {
+                    if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &else_keyword);
                     else_node = pm_else_node_create(parser, &else_keyword, parse_statements(parser, PM_CONTEXT_ELSE, (uint16_t) (depth + 1)), &parser->current);
                 } else {
                     else_node = pm_else_node_create(parser, &else_keyword, NULL, &parser->current);
@@ -18446,6 +18577,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             if (!match4(parser, PM_TOKEN_KEYWORD_RESCUE, PM_TOKEN_KEYWORD_ENSURE, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &begin_keyword);
                 begin_statements = parse_statements(parser, PM_CONTEXT_BEGIN, (uint16_t) (depth + 1));
                 pm_accepts_block_stack_pop(parser);
                 accept2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON);
@@ -18655,6 +18787,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             if (!match4(parser, PM_TOKEN_KEYWORD_RESCUE, PM_TOKEN_KEYWORD_ENSURE, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &class_keyword);
                 statements = UP(parse_statements(parser, PM_CONTEXT_CLASS, (uint16_t) (depth + 1)));
                 pm_accepts_block_stack_pop(parser);
             }
@@ -18982,6 +19115,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
                 if (!match4(parser, PM_TOKEN_KEYWORD_RESCUE, PM_TOKEN_KEYWORD_ENSURE, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
                     pm_accepts_block_stack_push(parser, true);
+                    if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &def_keyword);
                     statements = UP(parse_statements(parser, PM_CONTEXT_DEF, (uint16_t) (depth + 1)));
                     pm_accepts_block_stack_pop(parser);
                 }
@@ -19150,6 +19284,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             pm_statements_node_t *statements = NULL;
             if (!match1(parser, PM_TOKEN_KEYWORD_END)) {
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &for_keyword);
                 statements = parse_statements(parser, PM_CONTEXT_FOR, (uint16_t) (depth + 1));
             }
 
@@ -19290,6 +19425,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             if (!match4(parser, PM_TOKEN_KEYWORD_RESCUE, PM_TOKEN_KEYWORD_ENSURE, PM_TOKEN_KEYWORD_ELSE, PM_TOKEN_KEYWORD_END)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &module_keyword);
                 statements = UP(parse_statements(parser, PM_CONTEXT_MODULE, (uint16_t) (depth + 1)));
                 pm_accepts_block_stack_pop(parser);
             }
@@ -19365,6 +19501,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             pm_statements_node_t *statements = NULL;
             if (!match1(parser, PM_TOKEN_KEYWORD_END)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &keyword);
                 statements = parse_statements(parser, PM_CONTEXT_UNTIL, (uint16_t) (depth + 1));
                 pm_accepts_block_stack_pop(parser);
                 accept2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON);
@@ -19399,6 +19536,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             pm_statements_node_t *statements = NULL;
             if (!match1(parser, PM_TOKEN_KEYWORD_END)) {
                 pm_accepts_block_stack_push(parser, true);
+                if (parser->endless_ruby) parser->opening_indent = token_indentation(parser, &keyword);
                 statements = parse_statements(parser, PM_CONTEXT_WHILE, (uint16_t) (depth + 1));
                 pm_accepts_block_stack_pop(parser);
                 accept2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON);
@@ -22061,7 +22199,10 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .semantic_token_seen = false,
         .frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET,
         .current_regular_expression_ascii_only = false,
-        .warn_mismatched_indentation = true
+        .warn_mismatched_indentation = true,
+        .endless_ruby = false,
+        .pending_ends = 0,
+        .opening_indent = -1
     };
 
     // Initialize the constant pool. We're going to completely guess as to the
