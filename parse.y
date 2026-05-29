@@ -460,6 +460,7 @@ typedef struct token_info {
     const char *token;
     rb_code_position_t beg;
     int indent;
+    int line_indent;
     int nonspc;
     struct token_info *next;
 } token_info;
@@ -7044,19 +7045,21 @@ parser_isascii(struct parser_params *p)
 static void
 token_info_setup(token_info *ptinfo, const char *ptr, const rb_code_location_t *loc)
 {
-    int column = 1, nonspc = 0, i;
+    int column = 1, nonspc = 0, line_indent = 0, i;
     for (i = 0; i < loc->beg_pos.column; i++, ptr++) {
         if (*ptr == '\t') {
             column = (((column - 1) / TAB_WIDTH) + 1) * TAB_WIDTH;
         }
-        column++;
-        if (*ptr != ' ' && *ptr != '\t') {
+        if (!nonspc && *ptr != ' ' && *ptr != '\t') {
             nonspc = 1;
+            line_indent = column;
         }
+        column++;
     }
 
     ptinfo->beg = loc->beg_pos;
     ptinfo->indent = column;
+    ptinfo->line_indent = nonspc ? line_indent : column;
     ptinfo->nonspc = nonspc;
 }
 
@@ -11292,6 +11295,7 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
     lval->node = 0;
     p->yylloc = yylloc;
 
+    int paren_nest_before = p->lex.paren_nest;
     t = parser_yylex(p);
     RUBY_SET_YYLLOC(*p->yylloc);
 
@@ -11322,9 +11326,13 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
             else if (p->new_line_started && t != keyword_end) {
                 token_info e;
                 token_info_setup(&e, p->lex.pbeg, p->yylloc);
-                if (e.nonspc == 0) {
+                /* Inside unclosed parentheses/brackets/braces the line is a
+                 * continuation, so indentation must not auto-close blocks. */
+                if (e.nonspc == 0 && paren_nest_before == 0) {
                     token_info *info = p->token_info;
-                    while (info && !info->nonspc && e.indent <= info->indent) {
+                    /* For keywords in the middle of a line (e.g. `range.each do`),
+                     * compare against the indent of the line they appear on. */
+                    while (info && e.indent <= (info->nonspc ? info->line_indent : info->indent)) {
                         // Check if t is a continuation keyword
                         int is_cont = 0;
                         const char *beg_token = info->token;
