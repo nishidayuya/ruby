@@ -742,6 +742,42 @@ pm_static_literal_string(rb_iseq_t *iseq, VALUE string, int line_number)
     }
 }
 
+static void pm_reveal_static_literal(VALUE obj);
+
+static int
+pm_reveal_hash_entry_i(VALUE key, VALUE val, VALUE arg)
+{
+    pm_reveal_static_literal(key);
+    pm_reveal_static_literal(val);
+    return ST_CONTINUE;
+}
+
+/**
+ * Reveal hidden arrays and hashes in a static literal value so that they
+ * can be used directly via putobject in the frozen_literal path.
+ * Hidden objects (klass=0) cause SEGV when methods are dispatched on them.
+ */
+static void
+pm_reveal_static_literal(VALUE obj)
+{
+    if (SPECIAL_CONST_P(obj)) return;
+
+    if (RB_TYPE_P(obj, T_ARRAY)) {
+        if (RBASIC_CLASS(obj) == 0) {
+            rb_obj_reveal(obj, rb_cArray);
+        }
+        for (long i = 0; i < RARRAY_LEN(obj); i++) {
+            pm_reveal_static_literal(RARRAY_AREF(obj, i));
+        }
+    }
+    else if (RB_TYPE_P(obj, T_HASH)) {
+        if (RBASIC_CLASS(obj) == 0) {
+            rb_obj_reveal(obj, rb_cHash);
+        }
+        rb_hash_foreach(obj, pm_reveal_hash_entry_i, 0);
+    }
+}
+
 /**
  * Certain nodes can be compiled literally. This function returns the literal
  * value described by the given node. For example, an array node with all static
@@ -7128,6 +7164,7 @@ pm_compile_array_node(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list
                 VALUE value = pm_static_literal_value(iseq, node, scope_node);
                 RB_OBJ_SET_FROZEN_SHAREABLE(value);
                 if (scope_node->frozen_literal > 0) {
+                    pm_reveal_static_literal(value);
                     PUSH_INSN1(ret, *location, putobject, value);
                 }
                 else {
@@ -7291,6 +7328,9 @@ pm_compile_array_node(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list
     }
 
     FLUSH_CHUNK;
+    if (!popped && scope_node->frozen_literal > 0) {
+        PUSH_CALL(ret, *location, idFreeze, INT2FIX(0));
+    }
     if (popped) PUSH_INSN(ret, *location, pop);
 
 #undef FLUSH_CHUNK
@@ -9342,6 +9382,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 else {
                     VALUE value = pm_static_literal_value(iseq, node, scope_node);
                     if (scope_node->frozen_literal > 0) {
+                        pm_reveal_static_literal(value);
                         PUSH_INSN1(ret, location, putobject, value);
                     }
                     else {

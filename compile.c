@@ -5241,6 +5241,7 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
                 FLUSH_CHUNK;
                 if (first_chunk) {
                     if (frozen_all_literal_p(iseq)) {
+                        rb_obj_reveal(ary, rb_cArray);
                         ADD_INSN1(ret, line_node, putobject, ary);
                     }
                     else {
@@ -5395,6 +5396,7 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
                 FLUSH_CHUNK();
                 if (first_chunk) {
                     if (frozen_all_literal_p(iseq)) {
+                        rb_obj_reveal(hash, rb_cHash);
                         ADD_INSN1(ret, line_node, putobject, hash);
                     }
                     else {
