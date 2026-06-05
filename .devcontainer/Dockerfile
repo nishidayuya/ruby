@@ -11,21 +11,14 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     gpg \
     gnupg \
     build-essential \
-    autoconf \
-    bison \
-    gperf \
-    pkg-config \
     libssl-dev \
     libyaml-dev \
-    libreadline-dev \
+    libreadline6-dev \
     zlib1g-dev \
-    libncurses-dev \
+    libncurses5-dev \
     libffi-dev \
-    libgmp-dev \
+    libgdbm6 \
     libgdbm-dev \
-    libdb-dev \
-    rustc \
-    patch \
     dbus \
     kmod \
     chromium \
@@ -47,12 +40,8 @@ ENV PATH="/home/vscode/.local/share/mise/shims:${PATH}"
 # Install Ruby, Node, and Gemini CLI using mise
 RUN mise use -g ruby@latest \
     && mise use -g node@24 \
-    && npm install -g @google/gemini-cli @devcontainers/cli
+    && npm install -g @google/gemini-cli
 
 # Setup shell for mise
 RUN echo 'eval "$(mise activate bash)"' >> ~/.bashrc \
     && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
-
-RUN sudo apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && sudo apt-get -y install --no-install-recommends \
-    systemtap-sdt-dev
